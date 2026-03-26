@@ -9,8 +9,6 @@ env/
 venv/
 .env
 
-mainrun*.log
-
 node_modules/
 
 .vscode/
