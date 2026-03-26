@@ -1,6 +1,6 @@
 import utils
 import math, random, time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import json
 from pathlib import Path
 
@@ -11,6 +11,8 @@ from datasets import load_dataset
 from tokenizers import Tokenizer, models, trainers, pre_tokenizers, decoders
 from tqdm import tqdm
 import structlog
+
+from datetime import datetime
 
 @dataclass
 class Hyperparameters:
@@ -29,34 +31,36 @@ class Hyperparameters:
     seed: int = 1337
     num_titles: int = 100_000
     val_frac: float = 0.10
-    log_file: str = "./logs/mainrun.log"
+    log_file: str = field(default_factory=lambda: f"./logs/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log") #"./logs/mainrun.log" - new log file for each run
 
 def configure_logging(log_file: str):
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
     
     file_handler = open(log_file, 'w')
     
-    structlog.configure(
-        processors=[
-            structlog.stdlib.filter_by_level,
-            structlog.stdlib.add_logger_name,
-            structlog.stdlib.add_log_level,
-            structlog.stdlib.PositionalArgumentsFormatter(),
-            structlog.processors.TimeStamper(fmt="iso"),
-            structlog.processors.StackInfoRenderer(),
-            structlog.processors.format_exc_info,
-            structlog.processors.UnicodeDecoder(),
-            structlog.processors.JSONRenderer()
-        ],
-        context_class=dict,
-        logger_factory=structlog.stdlib.LoggerFactory(),
-        cache_logger_on_first_use=True,
-    )
+    # Note: The following structlog configuration is currently not used, as the DualLogger handles logging directly.
+
+    # structlog.configure(
+    #     processors=[
+    #         structlog.stdlib.filter_by_level,
+    #         structlog.stdlib.add_logger_name,
+    #         structlog.stdlib.add_log_level,
+    #         structlog.stdlib.PositionalArgumentsFormatter(),
+    #         structlog.processors.TimeStamper(fmt="iso"),
+    #         structlog.processors.StackInfoRenderer(),
+    #         structlog.processors.format_exc_info,
+    #         structlog.processors.UnicodeDecoder(),
+    #         structlog.processors.JSONRenderer()
+    #     ],
+    #     context_class=dict,
+    #     logger_factory=structlog.stdlib.LoggerFactory(),
+    #     cache_logger_on_first_use=True,
+    # )
     
     class DualLogger:
         def __init__(self, file_handler):
             self.file_handler = file_handler
-            self.logger = structlog.get_logger()
+            # self.logger = structlog.get_logger()  -- Not used in current implementation
             
         def log(self, event, **kwargs):
             log_entry = json.dumps({"event": event, "timestamp": time.time(), **kwargs})
@@ -77,7 +81,7 @@ def configure_logging(log_file: str):
 
 logger = None
 
-def get_titles(num_titles: int, seed: int, val_frac: float) -> str:
+def get_titles(num_titles: int, seed: int, val_frac: float) -> tuple[list[str], list[str]]: #str: - fixed type annotation 
     ds = load_dataset("julien040/hacker-news-posts", split="train", cache_dir="./data").shuffle(seed=seed)
     titles = [row["title"].strip() for row in ds.take(num_titles)]
     n = int(num_titles * (1 - val_frac))
@@ -101,6 +105,7 @@ def iter_full_split(split_ids: torch.Tensor, block_size: int, batch_size: int, d
         yield x, y
 
 def train_tokenizer(titles: list[str], vocab_size: int, unk_token: str = "<unk>", pad_token: str = "<pad>", eos_token: str = "<eos>") -> Tokenizer:
+    # because we are using bytes we never need the unk_token
     tokenizer = Tokenizer(models.BPE(unk_token=unk_token))
     tokenizer.pre_tokenizer = pre_tokenizers.ByteLevel()
     tokenizer.decoder = decoders.ByteLevel()
@@ -114,8 +119,10 @@ def train_tokenizer(titles: list[str], vocab_size: int, unk_token: str = "<unk>"
 class BPETokenizer:
     def __init__(self, tokenizer: Tokenizer):
         self.tk = tokenizer
-        self.stoi = {tok: i for tok, i in tokenizer.get_vocab().items()}
-        self.itos = {i: tok for tok, i in tokenizer.get_vocab().items()}
+
+        # never used, as we directly use the tokenizer's built-in methods for encoding/decoding
+        # self.stoi = {tok: i for tok, i in tokenizer.get_vocab().items()}
+        # self.itos = {i: tok for tok, i in tokenizer.get_vocab().items()}
 
     def encode(self, s: str) -> list[int]:
         return self.tk.encode(s).ids
@@ -240,9 +247,9 @@ def main():
     train_ids = torch.tensor(tok.encode(train_text), dtype=torch.long)
     val_ids = torch.tensor(tok.encode(val_text), dtype=torch.long)
     
-    batches = len(train_ids) // (args.block_size * args.batch_size)
-    max_steps = args.epochs * batches
-    eval_interval = batches // args.evals_per_epoch
+    batches = len(train_ids) // (args.block_size * args.batch_size) # calculating the number of batches we have
+    max_steps = args.epochs * batches # each batch performs a weight update, so the number of weight updates happening
+    eval_interval = batches // args.evals_per_epoch # how often to run validation
     logger.log("dataset_info",
                titles_count=len(train_titles),
                epochs=args.epochs,
@@ -277,18 +284,36 @@ def main():
         model.train()
         return losses / len(val_text)
 
-    ptr = 0
-    step = 0
-    t0 = time.time()
+    def evaluate_with_perplexity():
+        model.eval()
+        losses = 0.0
+        total_tokens = 0
+        
+        with torch.no_grad():
+            for xb, yb in iter_full_split(val_ids, args.block_size, args.batch_size, device):
+                logits, _ = model(xb, yb)
+                B, T, V = logits.size()
+                loss = F.cross_entropy(logits.view(-1, V), yb.view(-1), reduction='sum')
+                losses += loss.item()
+                total_tokens += B * T
+        
+        model.train()
+        loss_per_token = losses / total_tokens
+        perplexity = math.exp(min(loss_per_token, 20))
+        return loss_per_token, perplexity
+
+    ptr = 0 # remembers where in the million token strip we are
+    step = 0 # counts how many weight updates have happened total
+    t0 = time.time() # used for timing
     for epoch in range(1, args.epochs + 1):
         for _ in tqdm(range(1, batches + 1), desc=f"Epoch {epoch}/{args.epochs}"):
             step += 1
-            xb, yb, ptr = get_batch(train_ids, ptr, args.block_size, args.batch_size, device)
-            _, loss = model(xb, yb)
-            opt.zero_grad(set_to_none=True)
-            loss.backward()
+            xb, yb, ptr = get_batch(train_ids, ptr, args.block_size, args.batch_size, device) # xb -> what the model sees, yb -> what the model should predict
+            _, loss = model(xb, yb) # forward pass, we get the loss directly from the model, no need to calculate it separately
+            opt.zero_grad(set_to_none=True) # 
+            loss.backward() # backward pass, calculates the gradients for all parameters
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-            opt.step()
+            opt.step() # applies grad decent
             scheduler.step()
 
             elapsed = time.time() - t0
@@ -301,10 +326,12 @@ def main():
 
             if step == 1 or step % eval_interval == 0 or step == max_steps:
                 val_loss = evaluate()
+                val_loss_per_token, perplexity = evaluate_with_perplexity()
                 logger.log("validation_step",
                           step=step,
                           max_steps=max_steps,
                           loss=val_loss,
+                          perplexity=round(perplexity, 2),
                           elapsed_time=elapsed)
 
 if __name__ == "__main__":

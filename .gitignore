@@ -16,3 +16,14 @@ node_modules/
 
 .DS_Store
 Thumbs.db
+
+mainrun*.log
+run*.log
+baseline*.log
+
+dataset_info.json
+*.arrow
+*.lock
+data/
+mainrun/logs/
+*.log
