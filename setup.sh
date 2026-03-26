@@ -7,6 +7,8 @@
 # into the existing RunPod container. The marker file is also being manually 
 # created to bypass the check in utils.py
 
+# run: chmod +x setup.sh && ./setup.sh
+
 set -e
 
 echo "🚀 Setting up Mainrun environment..."
