@@ -16,7 +16,7 @@ from datetime import datetime
 
 @dataclass
 class Hyperparameters:
-    block_size: int = 256 # 128  Longer context means the attention layers get richer training signal
+    block_size: int = 128 
     batch_size: int = 64
     # 8000 # 16_000 - Fewer tokens means each token appears more frequently in the training data, the 
     # domain vocabulary is narrow so fewer token will be ok -- changed it back to 1600 becuase it messes
