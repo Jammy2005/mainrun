@@ -28,4 +28,4 @@ data/
 mainrun/logs/
 *.log
 
-mainrun/checkpoints/
+mainrun/checkpoints/mainrun/checkpoints/
