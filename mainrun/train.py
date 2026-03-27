@@ -421,7 +421,7 @@ import structlog
 class Hyperparameters:
     block_size: int = 256
     batch_size: int = 32
-    vocab_size: int = 8_000
+    vocab_size: int = 16_000
     n_layer: int = 8
     n_head: int = 8
     d_model: int = 512
