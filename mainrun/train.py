@@ -33,6 +33,7 @@ class Hyperparameters:
     weight_decay: float = 0.1
     evals_per_epoch: int = 3
     warmup_steps: int = 100
+    eta_min: float = 3e-5 
     
     epochs: int = 7
     seed: int = 1337
@@ -287,7 +288,7 @@ def main():
         opt,
         schedulers=[
             torch.optim.lr_scheduler.LinearLR(opt, start_factor=0.01, end_factor=1.0, total_iters=args.warmup_steps),
-            torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps - args.warmup_steps)
+            torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps - args.warmup_steps, eta_min=args.eta_min)
         ],
         milestones=[args.warmup_steps]
     )
