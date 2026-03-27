@@ -27,3 +27,5 @@ dataset_info.json
 data/
 mainrun/logs/
 *.log
+
+mainrun/checkpoints/
