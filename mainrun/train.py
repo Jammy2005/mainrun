@@ -333,7 +333,7 @@ def main():
             _, loss = model(xb, yb) # forward pass, we get the loss directly from the model, no need to calculate it separately
             opt.zero_grad(set_to_none=True) # 
             loss.backward() # backward pass, calculates the gradients for all parameters
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             opt.step() # applies grad decent
             scheduler.step()
 
