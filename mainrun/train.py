@@ -245,6 +245,15 @@ def get_lr(step, max_steps, lr):
     progress = step / max_steps
     return min_lr + 0.5 * (lr - min_lr) * (1 + math.cos(math.pi * progress))
 
+def get_lr(step, max_steps, lr, warmup_steps=50):
+    # phase 1: linear warmup
+    if step < warmup_steps:
+        return lr * (step / warmup_steps)
+    # phase 2: cosine decay from lr down to lr/10
+    min_lr = lr / 10
+    progress = (step - warmup_steps) / (max_steps - warmup_steps)
+    return min_lr + 0.5 * (lr - min_lr) * (1 + math.cos(math.pi * progress))
+
 def main():
     args = Hyperparameters()
     torch.manual_seed(args.seed)
