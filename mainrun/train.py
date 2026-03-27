@@ -14,6 +14,12 @@ import structlog
 
 from datetime import datetime
 
+"""
+changelog:
+
+1. changed adams optimiser
+"""
+
 @dataclass
 class Hyperparameters:
     block_size: int = 128
