@@ -227,6 +227,12 @@ class GPT(nn.Module):
             loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), reduction='mean')
         return logits, loss
 
+def get_lr(step, max_steps, lr):
+    # cosine decay from lr down to lr/10
+    min_lr = lr / 10
+    progress = step / max_steps
+    return min_lr + 0.5 * (lr - min_lr) * (1 + math.cos(math.pi * progress))
+
 def main():
     args = Hyperparameters()
     torch.manual_seed(args.seed)
@@ -275,7 +281,8 @@ def main():
     logger.log("model_info", parameters_count=model_params)
     
     # opt = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.1)
+    # opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.1)
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay, betas=(0.9, 0.95))
 
     scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps)
 
@@ -321,7 +328,10 @@ def main():
             loss.backward() # backward pass, calculates the gradients for all parameters
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
             opt.step() # applies grad decent
-            scheduler.step()
+            # scheduler.step()
+            lr_now = get_lr(step, max_steps, args.lr)
+            for pg in opt.param_groups:
+                pg['lr'] = lr_now
 
             elapsed = time.time() - t0
             logger.log("training_step",
