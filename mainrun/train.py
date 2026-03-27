@@ -16,13 +16,13 @@ from datetime import datetime
 
 @dataclass
 class Hyperparameters:
-    block_size: int = 128
+    block_size: int = 256 # 128  Longer context means the attention layers get richer training signal
     batch_size: int = 64
-    vocab_size: int = 16_000
-    n_layer: int = 6
+    vocab_size: int = 8000 # 16_000 - Fewer tokens means each token appears more frequently in the training data, the domain vocabulary is narrow so fewer token will be ok
+    n_layer: int = 8 # 6 - extra transformer layers
     n_head: int = 8
     d_model: int = 512
-    dropout: float = 0.1
+    dropout: float = 0 # was 0.1  but no overfitting was detected
     lr: float = 3e-4  # 6e-3 changed from sgd to adam 
     weight_decay: float = 0.1  # was 0.0
     evals_per_epoch: int = 3
