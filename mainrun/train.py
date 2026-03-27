@@ -180,6 +180,18 @@ class MLP(nn.Module):
         )
     def forward(self, x): return self.net(x)
 
+# SwiGLU replacement
+class MLP(nn.Module):
+    def __init__(self, cfg):
+        super().__init__()
+        hidden = int(2/3 * 4 * cfg.d_model)  # slightly smaller to keep param count similar
+        self.w1   = nn.Linear(cfg.d_model, hidden, bias=False)
+        self.w2   = nn.Linear(cfg.d_model, hidden, bias=False)
+        self.proj = nn.Linear(hidden, cfg.d_model, bias=False)
+
+    def forward(self, x):
+        return self.proj(F.silu(self.w1(x)) * self.w2(x))
+
 class Block(nn.Module):
     def __init__(self, cfg: GPTConfig):
         super().__init__()
