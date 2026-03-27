@@ -25,7 +25,7 @@ class Hyperparameters:
     block_size: int = 128
     batch_size: int = 64
     vocab_size: int = 16_000
-    n_layer: int = 6
+    n_layer: int = 8 #6
     n_head: int = 8
     d_model: int = 512
     dropout: float = 0.1
