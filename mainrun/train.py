@@ -24,7 +24,7 @@ class Hyperparameters:
     vocab_size: int = 16_000
     n_layer: int = 8 # 6 - extra transformer layers
     n_head: int = 8
-    d_model: int = 512
+    d_model: int = 768 # 512 - increased since we arent fully platueing by the end of training
     dropout: float = 0 # was 0.1  but no overfitting was detected
     lr: float = 3e-4  # 6e-3 changed from sgd to adam 
     weight_decay: float = 0.1  # was 0.0
