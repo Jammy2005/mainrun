@@ -232,6 +232,8 @@ def main():
     global logger
     logger = configure_logging(args.log_file)
     
+    Path("./checkpoints").mkdir(parents=True, exist_ok=True)
+
     hyperparams_dict = vars(args)
     logger.log("hyperparameters_configured", **hyperparams_dict)
     
@@ -333,6 +335,14 @@ def main():
                           loss=val_loss,
                           perplexity=round(perplexity, 2),
                           elapsed_time=elapsed)
+
+    # after the training loop
+    torch.save({
+        'model_state_dict': model.state_dict(),
+        'cfg': cfg,
+        'tokenizer': tok.tk,
+    }, './checkpoints/model_final.pt')
+    print("model saved to ./checkpoints/model_final.pt")
 
 if __name__ == "__main__":
     try:

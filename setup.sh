@@ -11,6 +11,12 @@
 
 set -e
 
+# At the top of setup.sh, after set -e
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$SCRIPT_DIR")"  # if setup.sh is inside a subfolder
+# OR if setup.sh is at the repo root:
+REPO_ROOT="$SCRIPT_DIR"
+
 echo "🚀 Setting up Mainrun environment..."
 
 # 1. Install task runner
@@ -25,7 +31,7 @@ npm install -g zx
 
 # 3. Install Python dependencies
 echo "📦 Installing Python dependencies..."
-pip3 install -r ~/mainrun/.devcontainer/requirements.txt
+pip3 install -r "$REPO_ROOT/.devcontainer/requirements.txt"
 
 # 4. Create devcontainer marker file
 echo "✅ Creating devcontainer marker..."
