@@ -26,4 +26,4 @@ dataset_info.json
 *.lock
 data/
 mainrun/logs/
-*.log
+*.logmainrun/checkpoints/
