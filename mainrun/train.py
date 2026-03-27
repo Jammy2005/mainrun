@@ -32,6 +32,7 @@ class Hyperparameters:
     lr: float = 3e-4
     weight_decay: float = 0.1
     evals_per_epoch: int = 3
+    warmup_steps: int = 100
     
     epochs: int = 7
     seed: int = 1337
@@ -281,15 +282,14 @@ def main():
     # opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.1)
     # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps)
 
-    opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.1)
-    warmup_steps = 100
+    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
     scheduler = torch.optim.lr_scheduler.SequentialLR(
         opt,
         schedulers=[
-            torch.optim.lr_scheduler.LinearLR(opt, start_factor=0.01, end_factor=1.0, total_iters=warmup_steps),
-            torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps - warmup_steps)
+            torch.optim.lr_scheduler.LinearLR(opt, start_factor=0.01, end_factor=1.0, total_iters=args.warmup_steps),
+            torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps - args.warmup_steps)
         ],
-        milestones=[warmup_steps]
+        milestones=[args.warmup_steps]
     )
 
     def evaluate():
