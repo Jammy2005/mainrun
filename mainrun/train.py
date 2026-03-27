@@ -23,8 +23,8 @@ class Hyperparameters:
     n_head: int = 8
     d_model: int = 512
     dropout: float = 0.1
-    lr: float = 6e-3
-    weight_decay: float = 0.0
+    lr: float = 3e-4
+    weight_decay: float = 0.1
     evals_per_epoch: int = 3
     
     epochs: int = 7
