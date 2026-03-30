@@ -578,12 +578,19 @@ def main():
                 if val_loss < best_val_loss:
                     best_val_loss = val_loss
                 logger.log("validation_step",
-                          step=step,
-                          max_steps=max_steps,
-                          loss=val_loss,
-                          perplexity=round(perplexity, 2),
-                          elapsed_time=elapsed)
-
+                        step=step,
+                        max_steps=max_steps,
+                        loss=val_loss,
+                        perplexity=round(perplexity, 2),
+                        elapsed_time=elapsed)
+                # add this block
+                if step >= swa_start:
+                    swa_val_loss = evaluate_swa()
+                    logger.log("swa_validation_step",
+                            step=step,
+                            max_steps=max_steps,
+                            swa_val_loss=round(swa_val_loss, 6),
+                            elapsed_time=elapsed)
 
     # --- SWA final evaluation ---
     swa_val_loss = evaluate_swa()
