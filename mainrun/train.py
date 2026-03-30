@@ -545,6 +545,19 @@ def main():
         perplexity = math.exp(min(loss_per_token, 20))
         return loss_per_token, perplexity
 
+    def evaluate_x(model, val_ids, val_text, block_size, batch_size, device):
+        model.eval()
+        losses = 0.0
+        with torch.no_grad():
+            for xb, yb in iter_full_split(val_ids, block_size, batch_size, device):
+                logits, _ = model(xb, yb)
+                B, T, V = logits.size()
+                loss = F.cross_entropy(logits.view(-1, V), yb.view(-1), reduction="sum")
+                losses += loss.item()
+        model.train()
+        return losses / len(val_text)
+
+
     def evaluate_swa():
         swa_model.eval()
         losses = 0.0
@@ -558,6 +571,10 @@ def main():
                 total_tokens += B * T
         swa_model.train()
         return losses / len(val_text) #total_tokens
+
+        def evaluate_swa():
+            return evaluate_x(swa_model.module, val_ids, val_text, 
+                            args.block_size, args.batch_size, device)
 
     best_val_loss = float("inf")
 
