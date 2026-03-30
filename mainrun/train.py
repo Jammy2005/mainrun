@@ -73,24 +73,47 @@ class Muon(torch.optim.Optimizer):
                     update = nesterov
                 p.add_(update, alpha=-group['lr'])
 @dataclass
-class Hyperparameters:
-    block_size: int = 128
-    batch_size: int = 128 #64 
-    vocab_size: int = 16_000
-    n_layer: int = 8 #6
-    n_head: int = 8
-    d_model: int = 512
-    dropout: float = 0.1
-    lr: float = 3e-4
-    weight_decay: float = 0.1
-    evals_per_epoch: int = 3
-    warmup_steps: int = 100
-    eta_min: float = 3e-5 
+# class Hyperparameters:
+#     block_size: int = 128
+#     batch_size: int = 128 #64 
+#     vocab_size: int = 16_000
+#     n_layer: int = 8 #6
+#     n_head: int = 8
+#     d_model: int = 512
+#     dropout: float = 0.1
+#     lr: float = 3e-4
+#     weight_decay: float = 0.1
+#     evals_per_epoch: int = 3
+#     warmup_steps: int = 100
+#     eta_min: float = 3e-5 
     
-    epochs: int = 7
-    seed: int = 1337
+#     epochs: int = 7
+#     seed: int = 1337
+#     num_titles: int = 100_000
+#     val_frac: float = 0.10
+@dataclass
+class Hyperparameters:
+    # Data (DO NOT CHANGE — assessment rules)
     num_titles: int = 100_000
     val_frac: float = 0.10
+    seed: int = 1337
+    epochs: int = 7               # DO NOT CHANGE — assessment rule
+
+    # Model architecture
+    block_size: int = 128
+    n_layer: int = 24
+    n_head: int = 1
+    d_model: int = 640
+    dropout: float = 0.1
+
+    # Training
+    batch_size: int = 256
+    lr: float = 1.2e-3
+    weight_decay: float = 0.05
+    betas: tuple = (0.9, 0.999)
+    warmup_frac: float = 0.20
+    grad_clip: float = 1.0
+    evals_per_epoch: int = 3
     log_file: str = field(default_factory=lambda: f"./logs/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log") #"./logs/mainrun.log" - new log file for each run
 
 # sets up logging
