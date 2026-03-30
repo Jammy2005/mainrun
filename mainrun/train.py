@@ -557,7 +557,7 @@ def main():
                 losses += loss.item()
                 total_tokens += B * T
         swa_model.train()
-        return losses / total_tokens
+        return losses / len(val_text) #total_tokens
 
     best_val_loss = float("inf")
 
