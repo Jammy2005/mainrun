@@ -592,7 +592,7 @@ def main():
             if opt.adamw is not None:
                 opt.adamw.zero_grad(set_to_none=True)
             loss.backward() # backward pass, calculates the gradients for all parameters
-            torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), args.grad_clip) # gradient clipping to prevent exploding gradients
             opt.step() # applies grad decent
             scheduler.step() # updates the learning rate according to the schedule
             if step >= swa_start:
