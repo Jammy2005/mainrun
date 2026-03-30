@@ -4,6 +4,7 @@ from dataclasses import dataclass, field
 import json
 from pathlib import Path
 
+from torch.utils.checkpoint import checkpoint
 import torch
 import torch.nn as nn
 from torch.nn import functional as F
