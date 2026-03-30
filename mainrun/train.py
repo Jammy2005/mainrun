@@ -413,9 +413,9 @@ def main():
         model.train()
         return losses / len(val_text)
 
-        def evaluate_swa():
-            return evaluate_x(swa_model.module, val_ids, val_text, 
-                            args.block_size, args.batch_size, device)
+    def evaluate_swa():
+        return evaluate_x(swa_model.module, val_ids, val_text, 
+                        args.block_size, args.batch_size, device)
 
     best_val_loss = float("inf")
 
