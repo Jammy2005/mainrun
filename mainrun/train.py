@@ -423,7 +423,7 @@ def main():
     step = 0 # counts how many weight updates have happened total
     t0 = time.time() # used for timing
     for epoch in range(1, args.epochs + 1):
-        for _ in tqdm(range(1, batches + 1), desc=f"Epoch {epoch}/{args.epochs}")
+        for _ in tqdm(range(1, batches + 1), desc=f"Epoch {epoch}/{args.epochs}"):
             step += 1
             xb, yb, ptr = get_batch(train_ids, ptr, args.block_size, args.batch_size, device) # xb -> what the model sees, yb -> what the model should predict
             with torch.autocast(device_type=device, dtype=torch.bfloat16): # using bf16 for faster training on supported hardware
