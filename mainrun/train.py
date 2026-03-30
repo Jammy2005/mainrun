@@ -72,7 +72,7 @@ class Muon(torch.optim.Optimizer):
                 else:
                     update = nesterov
                 p.add_(update, alpha=-group['lr'])
-@dataclass
+# @dataclass
 # class Hyperparameters:
 #     block_size: int = 128
 #     batch_size: int = 128 #64 
