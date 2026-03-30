@@ -98,6 +98,7 @@ class Hyperparameters:
     val_frac: float = 0.10
     seed: int = 1337
     epochs: int = 7               # DO NOT CHANGE — assessment rule
+    vocab_size: int = 16_000
 
     # Model architecture
     block_size: int = 128
