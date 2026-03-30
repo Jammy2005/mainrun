@@ -15,12 +15,6 @@ import structlog
 
 from datetime import datetime
 
-"""
-changelog:
-
-1. changed adams optimiser
-"""
-
 def _zeropower_via_newtonschulz5(G, steps=5):
     """Orthogonalize G using Newton-Schulz iteration."""
     assert G.ndim == 2
@@ -36,7 +30,6 @@ def _zeropower_via_newtonschulz5(G, steps=5):
     if G.size(0) > G.size(1):
         X = X.T
     return X.to(G.dtype)
-
 
 class Muon(torch.optim.Optimizer):
     """Muon: Momentum + orthogonalized update for 2D weights; SGD momentum for rest."""
@@ -73,25 +66,7 @@ class Muon(torch.optim.Optimizer):
                 else:
                     update = nesterov
                 p.add_(update, alpha=-group['lr'])
-# @dataclass
-# class Hyperparameters:
-#     block_size: int = 128
-#     batch_size: int = 128 #64 
-#     vocab_size: int = 16_000
-#     n_layer: int = 8 #6
-#     n_head: int = 8
-#     d_model: int = 512
-#     dropout: float = 0.1
-#     lr: float = 3e-4
-#     weight_decay: float = 0.1
-#     evals_per_epoch: int = 3
-#     warmup_steps: int = 100
-#     eta_min: float = 3e-5 
-    
-#     epochs: int = 7
-#     seed: int = 1337
-#     num_titles: int = 100_000
-#     val_frac: float = 0.10
+
 @dataclass
 class Hyperparameters:
     # Data (DO NOT CHANGE — assessment rules)
@@ -106,7 +81,7 @@ class Hyperparameters:
     n_layer: int = 24
     n_head: int = 1
     d_model: int = 640
-    dropout: float = 0.1
+    dropout: float = 0.05#0.1
 
     # Training
     batch_size: int = 256
@@ -124,44 +99,9 @@ def configure_logging(log_file: str):
     
     file_handler = open(log_file, 'w')
     
-    # Note: The following structlog configuration is currently not used, as the DualLogger handles logging directly.
-
-    # structlog.configure(
-    #     processors=[
-    #         structlog.stdlib.filter_by_level,
-    #         structlog.stdlib.add_logger_name,
-    #         structlog.stdlib.add_log_level,
-    #         structlog.stdlib.PositionalArgumentsFormatter(),
-    #         structlog.processors.TimeStamper(fmt="iso"),
-    #         structlog.processors.StackInfoRenderer(),
-    #         structlog.processors.format_exc_info,
-    #         structlog.processors.UnicodeDecoder(),
-    #         structlog.processors.JSONRenderer()
-    #     ],
-    #     context_class=dict,
-    #     logger_factory=structlog.stdlib.LoggerFactory(),
-    #     cache_logger_on_first_use=True,
-    # )
-    
     class DualLogger:
         def __init__(self, file_handler):
             self.file_handler = file_handler
-            # self.logger = structlog.get_logger()  -- Not used in current implementation
-            
-        # def log(self, event, **kwargs):
-        #     log_entry = json.dumps({"event": event, "timestamp": time.time(), **kwargs})
-        #     self.file_handler.write(log_entry + "\n")
-        #     self.file_handler.flush()
-            
-        #     if kwargs.get("prnt", True):
-        #         if "step" in kwargs and "max_steps" in kwargs:
-        #             tqdm.write(f"[{kwargs.get('step'):>5}/{kwargs.get('max_steps')}] {event}: loss={kwargs.get('loss', 'N/A'):.6f} time={kwargs.get('elapsed_time', 0):.2f}s")
-        #         else:
-        #             parts = [f"{k}={v}" for k, v in kwargs.items() if k not in ["prnt", "timestamp"]]
-        #             if parts:
-        #                 tqdm.write(f"{event}: {', '.join(parts)}")
-        #             else:
-        #                 tqdm.write(event)
 
         def log(self, event, **kwargs):
             log_entry = json.dumps({"event": event, "timestamp": time.time(), **kwargs})
@@ -223,10 +163,6 @@ class BPETokenizer:
     def __init__(self, tokenizer: Tokenizer):
         self.tk = tokenizer
 
-        # never used, as we directly use the tokenizer's built-in methods for encoding/decoding
-        # self.stoi = {tok: i for tok, i in tokenizer.get_vocab().items()}
-        # self.itos = {i: tok for tok, i in tokenizer.get_vocab().items()}
-
     def encode(self, s: str) -> list[int]:
         return self.tk.encode(s).ids
 
@@ -262,16 +198,6 @@ def apply_rope(q, k, freqs_cis):
 
 class CausalSelfAttention(nn.Module):
     def __init__(self, cfg: GPTConfig):
-        # super().__init__()
-        # assert cfg.d_model % cfg.n_head == 0
-        # self.head_dim = cfg.d_model // cfg.n_head
-        # self.n_head   = cfg.n_head
-        # self.qkv = nn.Linear(cfg.d_model, 3 * cfg.d_model)
-        # self.proj = nn.Linear(cfg.d_model, cfg.d_model)
-        # self.attn_drop = nn.Dropout(cfg.dropout)
-        # self.resid_drop= nn.Dropout(cfg.dropout)
-        # self.register_buffer("tril", torch.tril(torch.ones(cfg.block_size, cfg.block_size)))
-        # self.dropout = cfg.dropout
         super().__init__()
         assert cfg.d_model % cfg.n_head == 0
         self.head_dim = cfg.d_model // cfg.n_head
@@ -281,24 +207,6 @@ class CausalSelfAttention(nn.Module):
         self.proj.RESIDUAL_SCALE_INIT = 0.02 / math.sqrt(2 * cfg.n_layer)
         self.dropout = cfg.dropout
         self.resid_drop = nn.Dropout(cfg.dropout)
-
-    # def forward(self, x: torch.Tensor):
-    #     B, T, C = x.size()
-    #     qkv = self.qkv(x).view(B, T, 3, self.n_head, self.head_dim).transpose(1, 3)
-    #     q, k, v = qkv[..., 0, :, :], qkv[..., 1, :, :], qkv[..., 2, :, :]
-        
-    #     # att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-    #     # att = att.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
-    #     # att = F.softmax(att, dim=-1)
-    #     # att = self.attn_drop(att)
-    #     # y = att @ v
-
-    #     y = F.scaled_dot_product_attention(q, k, v,
-    #     dropout_p=self.dropout if self.training else 0.0,
-    #     is_causal=True)
-
-    #     y = y.transpose(1, 2).contiguous().view(B, T, C)
-    #     return self.resid_drop(self.proj(y))
 
     def forward(self, x, freqs_cis):
         B, T, C = x.size()
@@ -325,24 +233,11 @@ class MLP(nn.Module):
         self.drop = nn.Dropout(cfg.dropout)
         self.down.RESIDUAL_SCALE_INIT = 0.02 / math.sqrt(2 * cfg.n_layer)
 
-        # self.net = nn.Sequential(
-        #     nn.Linear(cfg.d_model, 4 * cfg.d_model),
-        #     nn.GELU(),
-        #     nn.Linear(4 * cfg.d_model, cfg.d_model),
-        #     nn.Dropout(cfg.dropout),
-        # )
-
-    # def forward(self, x): return self.net(x)
     def forward(self, x):
         return self.drop(self.down(F.silu(self.gate(x)) * self.up(x)))
 
 class Block(nn.Module):
     def __init__(self, cfg: GPTConfig):
-        # super().__init__()
-        # self.ln1 = nn.LayerNorm(cfg.d_model)
-        # self.ln2 = nn.LayerNorm(cfg.d_model)
-        # self.attn = CausalSelfAttention(cfg)
-        # self.mlp  = MLP(cfg)
         super().__init__()
         self.ln = nn.LayerNorm(cfg.d_model)
         self.attn = CausalSelfAttention(cfg)
@@ -351,30 +246,12 @@ class Block(nn.Module):
         self.ls_attn = nn.Parameter(ls_init * torch.ones(cfg.d_model))
         self.ls_mlp  = nn.Parameter(ls_init * torch.ones(cfg.d_model))
 
-    # def forward(self, x):
-    #     x = x + self.attn(self.ln1(x))
-    #     x = x + self.mlp(self.ln2(x))
-    #     return x
-
     def forward(self, x, freqs_cis):
         ln_out = self.ln(x)
         return x + self.ls_attn * self.attn(ln_out, freqs_cis) + self.ls_mlp * self.mlp(ln_out)
 
 class GPT(nn.Module):
     def __init__(self, cfg: GPTConfig):
-        # super().__init__()
-        # self.cfg = cfg
-        # self.token_emb = nn.Embedding(cfg.vocab_size, cfg.d_model)
-        # # self.pos_emb   = nn.Parameter(torch.zeros(1, cfg.block_size, cfg.d_model))
-        # freqs = precompute_rope_freqs(head_dim, cfg.block_size)
-        # self.register_buffer("freqs_cis", freqs)
-        # self.drop      = nn.Dropout(cfg.dropout)
-        # self.blocks    = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
-        # self.ln_f      = nn.LayerNorm(cfg.d_model)
-        # self.head      = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
-
-        # self.apply(self._init_weights)
-        # self.head.weight = self.token_emb.weight
         super().__init__()
         self.cfg = cfg
         self.token_emb = nn.Embedding(cfg.vocab_size, cfg.d_model)
@@ -397,27 +274,7 @@ class GPT(nn.Module):
             nn.init.normal_(module.weight, mean=0.0, std=std)
             if isinstance(module, nn.Linear) and module.bias is not None:
                 nn.init.zeros_(module.bias)
-    # def _init_weights(module):
-    #     if isinstance(module, (nn.Linear, nn.Embedding)):
-    #         nn.init.normal_(module.weight, mean=0.0, std=0.02)
-    #         if isinstance(module, nn.Linear) and module.bias is not None:
-    #             nn.init.zeros_(module.bias)
 
-    # def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None):
-    #     B, T = idx.size()
-    #     tok = self.token_emb(idx)
-    #     pos = self.pos_emb[:, :T, :]
-    #     x = self.drop(tok + pos)
-    #     # for block in self.blocks: x = block(x)
-    #     for block in self.blocks:
-    #         x = checkpoint(block, x, self.freqs_cis, use_reentrant=False)
-    #     x = self.ln_f(x)
-    #     logits = self.head(x)
-    #     if targets is None:
-    #         loss = None
-    #     else:
-    #         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), reduction='mean')
-    #     return logits, loss
     def forward(self, idx, targets=None): #blah
         B, T = idx.size()
         x = self.drop(self.token_emb(idx))
@@ -485,7 +342,6 @@ def main():
     model = GPT(cfg).to(device)
 
     num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    # log(fh, "model_info", num_params=num_params)
     logger.log("model_info", parameters_count=num_params)
     
     # --- Optimizer & Scheduler ---
@@ -557,21 +413,6 @@ def main():
         model.train()
         return losses / len(val_text)
 
-
-    def evaluate_swa():
-        swa_model.eval()
-        losses = 0.0
-        total_tokens = 0
-        with torch.no_grad():
-            for xb, yb in iter_full_split(val_ids, args.block_size, args.batch_size, device):
-                logits, _ = swa_model(xb, yb)
-                B, T, V = logits.size()
-                loss = F.cross_entropy(logits.view(-1, V), yb.view(-1), reduction='sum')
-                losses += loss.item()
-                total_tokens += B * T
-        swa_model.train()
-        return losses / len(val_text) #total_tokens
-
         def evaluate_swa():
             return evaluate_x(swa_model.module, val_ids, val_text, 
                             args.block_size, args.batch_size, device)
@@ -582,7 +423,7 @@ def main():
     step = 0 # counts how many weight updates have happened total
     t0 = time.time() # used for timing
     for epoch in range(1, args.epochs + 1):
-        for _ in tqdm(range(1, batches + 1), desc=f"Epoch {epoch}/{args.epochs}"):
+        for _ in tqdm(range(1, batches + 1), desc=f"Epoch {epoch}/{args.epochs}")
             step += 1
             xb, yb, ptr = get_batch(train_ids, ptr, args.block_size, args.batch_size, device) # xb -> what the model sees, yb -> what the model should predict
             with torch.autocast(device_type=device, dtype=torch.bfloat16): # using bf16 for faster training on supported hardware
