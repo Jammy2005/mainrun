@@ -148,6 +148,21 @@ def configure_logging(log_file: str):
             self.file_handler = file_handler
             # self.logger = structlog.get_logger()  -- Not used in current implementation
             
+        # def log(self, event, **kwargs):
+        #     log_entry = json.dumps({"event": event, "timestamp": time.time(), **kwargs})
+        #     self.file_handler.write(log_entry + "\n")
+        #     self.file_handler.flush()
+            
+        #     if kwargs.get("prnt", True):
+        #         if "step" in kwargs and "max_steps" in kwargs:
+        #             tqdm.write(f"[{kwargs.get('step'):>5}/{kwargs.get('max_steps')}] {event}: loss={kwargs.get('loss', 'N/A'):.6f} time={kwargs.get('elapsed_time', 0):.2f}s")
+        #         else:
+        #             parts = [f"{k}={v}" for k, v in kwargs.items() if k not in ["prnt", "timestamp"]]
+        #             if parts:
+        #                 tqdm.write(f"{event}: {', '.join(parts)}")
+        #             else:
+        #                 tqdm.write(event)
+
         def log(self, event, **kwargs):
             log_entry = json.dumps({"event": event, "timestamp": time.time(), **kwargs})
             self.file_handler.write(log_entry + "\n")
@@ -155,7 +170,9 @@ def configure_logging(log_file: str):
             
             if kwargs.get("prnt", True):
                 if "step" in kwargs and "max_steps" in kwargs:
-                    tqdm.write(f"[{kwargs.get('step'):>5}/{kwargs.get('max_steps')}] {event}: loss={kwargs.get('loss', 'N/A'):.6f} time={kwargs.get('elapsed_time', 0):.2f}s")
+                    loss_val = kwargs.get('loss') or kwargs.get('swa_val_loss', 'N/A')
+                    loss_str = f"{loss_val:.6f}" if isinstance(loss_val, float) else str(loss_val)
+                    tqdm.write(f"[{kwargs.get('step'):>5}/{kwargs.get('max_steps')}] {event}: loss={loss_str} time={kwargs.get('elapsed_time', 0):.2f}s")
                 else:
                     parts = [f"{k}={v}" for k, v in kwargs.items() if k not in ["prnt", "timestamp"]]
                     if parts:
