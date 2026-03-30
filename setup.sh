@@ -25,7 +25,9 @@ npm install -g zx
 
 # 3. Install Python dependencies
 echo "📦 Installing Python dependencies..."
-pip3 install -r ~/mainrun/.devcontainer/requirements.txt
+# pip3 install -r ~/mainrun/.devcontainer/requirements.txt
+pip3 install -r "$(pwd)/.devcontainer/requirements.txt"
+
 
 # 4. Create devcontainer marker file
 echo "✅ Creating devcontainer marker..."

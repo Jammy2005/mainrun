@@ -20,6 +20,58 @@ changelog:
 1. changed adams optimiser
 """
 
+def _zeropower_via_newtonschulz5(G, steps=5):
+    """Orthogonalize G using Newton-Schulz iteration."""
+    assert G.ndim == 2
+    a, b, c = 3.4445, -4.7750, 2.0315
+    X = G.float()
+    X = X / (X.norm() + 1e-7)
+    if X.size(0) > X.size(1):
+        X = X.T
+    for _ in range(steps):
+        A = X @ X.T
+        B = b * A + c * (A @ A)
+        X = a * X + B @ X
+    if G.size(0) > G.size(1):
+        X = X.T
+    return X.to(G.dtype)
+
+
+class Muon(torch.optim.Optimizer):
+    """Muon: Momentum + orthogonalized update for 2D weights; SGD momentum for rest."""
+    def __init__(self, params, lr=0.02, momentum=0.95,
+                 adamw_params=None, adamw_lr=3e-3, adamw_wd=0.0, adamw_betas=(0.9, 0.95)):
+        defaults = dict(lr=lr, momentum=momentum)
+        super().__init__(params, defaults)
+        # AdamW sub-optimizer for 1D params and embeddings
+        if adamw_params is not None:
+            self.adamw = torch.optim.AdamW(
+                adamw_params, lr=adamw_lr, weight_decay=adamw_wd, betas=adamw_betas
+            )
+        else:
+            self.adamw = None
+
+    @torch.no_grad()
+    def step(self):
+        if self.adamw is not None:
+            self.adamw.step()
+        for group in self.param_groups:
+            for p in group['params']:
+                if p.grad is None:
+                    continue
+                state = self.state[p]
+                if 'buf' not in state:
+                    state['buf'] = torch.zeros_like(p)
+                buf = state['buf']
+                buf.mul_(group['momentum']).add_(p.grad)
+                # Nesterov: use g + momentum * v as update direction
+                nesterov = p.grad + group['momentum'] * buf
+                if p.ndim == 2:
+                    update = _zeropower_via_newtonschulz5(nesterov)
+                    update *= max(p.size(0), p.size(1)) ** 0.5
+                else:
+                    update = nesterov
+                p.add_(update, alpha=-group['lr'])
 @dataclass
 class Hyperparameters:
     block_size: int = 128
@@ -41,6 +93,7 @@ class Hyperparameters:
     val_frac: float = 0.10
     log_file: str = field(default_factory=lambda: f"./logs/run_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log") #"./logs/mainrun.log" - new log file for each run
 
+# sets up logging
 def configure_logging(log_file: str):
     Path(log_file).parent.mkdir(parents=True, exist_ok=True)
     
@@ -150,108 +203,222 @@ class GPTConfig:
     d_model: int
     dropout: float
 
+def precompute_rope_freqs(head_dim, max_seq_len, base=20, device='cpu'):
+    freqs = 1.0 / (base ** (torch.arange(0, head_dim, 2, device=device).float() / head_dim))
+    t = torch.arange(max_seq_len, device=device).float()
+    freqs = torch.outer(t, freqs)  # [T, head_dim/2]
+    return torch.polar(torch.ones_like(freqs), freqs)  # complex [T, head_dim/2]
+
+def apply_rope(q, k, freqs_cis):
+    # q, k: [B, n_head, T, head_dim]
+    def rotate(x):
+        xc = x.float().reshape(*x.shape[:-1], -1, 2)
+        xc = torch.view_as_complex(xc.contiguous())  # [B, H, T, head_dim/2]
+        xc = xc * freqs_cis.unsqueeze(0).unsqueeze(0)
+        return torch.view_as_real(xc).flatten(-2).to(x.dtype)
+    return rotate(q), rotate(k)
+
 class CausalSelfAttention(nn.Module):
     def __init__(self, cfg: GPTConfig):
+        # super().__init__()
+        # assert cfg.d_model % cfg.n_head == 0
+        # self.head_dim = cfg.d_model // cfg.n_head
+        # self.n_head   = cfg.n_head
+        # self.qkv = nn.Linear(cfg.d_model, 3 * cfg.d_model)
+        # self.proj = nn.Linear(cfg.d_model, cfg.d_model)
+        # self.attn_drop = nn.Dropout(cfg.dropout)
+        # self.resid_drop= nn.Dropout(cfg.dropout)
+        # self.register_buffer("tril", torch.tril(torch.ones(cfg.block_size, cfg.block_size)))
+        # self.dropout = cfg.dropout
         super().__init__()
         assert cfg.d_model % cfg.n_head == 0
         self.head_dim = cfg.d_model // cfg.n_head
-        self.n_head   = cfg.n_head
+        self.n_head = cfg.n_head
         self.qkv = nn.Linear(cfg.d_model, 3 * cfg.d_model)
         self.proj = nn.Linear(cfg.d_model, cfg.d_model)
-        self.attn_drop = nn.Dropout(cfg.dropout)
-        self.resid_drop= nn.Dropout(cfg.dropout)
-        self.register_buffer("tril", torch.tril(torch.ones(cfg.block_size, cfg.block_size)))
+        self.proj.RESIDUAL_SCALE_INIT = 0.02 / math.sqrt(2 * cfg.n_layer)
+        self.dropout = cfg.dropout
+        self.resid_drop = nn.Dropout(cfg.dropout)
 
-    def forward(self, x: torch.Tensor):
+    # def forward(self, x: torch.Tensor):
+    #     B, T, C = x.size()
+    #     qkv = self.qkv(x).view(B, T, 3, self.n_head, self.head_dim).transpose(1, 3)
+    #     q, k, v = qkv[..., 0, :, :], qkv[..., 1, :, :], qkv[..., 2, :, :]
+        
+    #     # att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
+    #     # att = att.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
+    #     # att = F.softmax(att, dim=-1)
+    #     # att = self.attn_drop(att)
+    #     # y = att @ v
+
+    #     y = F.scaled_dot_product_attention(q, k, v,
+    #     dropout_p=self.dropout if self.training else 0.0,
+    #     is_causal=True)
+
+    #     y = y.transpose(1, 2).contiguous().view(B, T, C)
+    #     return self.resid_drop(self.proj(y))
+
+    def forward(self, x, freqs_cis):
         B, T, C = x.size()
         qkv = self.qkv(x).view(B, T, 3, self.n_head, self.head_dim).transpose(1, 3)
         q, k, v = qkv[..., 0, :, :], qkv[..., 1, :, :], qkv[..., 2, :, :]
-        att = (q @ k.transpose(-2, -1)) * (1.0 / math.sqrt(k.size(-1)))
-        att = att.masked_fill(self.tril[:T, :T] == 0, float("-inf"))
-        att = F.softmax(att, dim=-1)
-        att = self.attn_drop(att)
-        y = att @ v
+        q, k = apply_rope(q, k, freqs_cis[:T])
+        y = F.scaled_dot_product_attention(
+            q, k, v,
+            dropout_p=self.dropout if self.training else 0.0,
+            is_causal=True,
+        )
         y = y.transpose(1, 2).contiguous().view(B, T, C)
         return self.resid_drop(self.proj(y))
 
 class MLP(nn.Module):
     def __init__(self, cfg: GPTConfig):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(cfg.d_model, 4 * cfg.d_model),
-            nn.GELU(),
-            nn.Linear(4 * cfg.d_model, cfg.d_model),
-            nn.Dropout(cfg.dropout),
-        )
-    def forward(self, x): return self.net(x)
+
+        # SwiGLU with 4*d_model hidden (larger capacity)
+        hidden = 4 * cfg.d_model
+        self.gate = nn.Linear(cfg.d_model, hidden, bias=False)
+        self.up   = nn.Linear(cfg.d_model, hidden, bias=False)
+        self.down = nn.Linear(hidden, cfg.d_model, bias=False)
+        self.drop = nn.Dropout(cfg.dropout)
+        self.down.RESIDUAL_SCALE_INIT = 0.02 / math.sqrt(2 * cfg.n_layer)
+
+        # self.net = nn.Sequential(
+        #     nn.Linear(cfg.d_model, 4 * cfg.d_model),
+        #     nn.GELU(),
+        #     nn.Linear(4 * cfg.d_model, cfg.d_model),
+        #     nn.Dropout(cfg.dropout),
+        # )
+
+    # def forward(self, x): return self.net(x)
+    def forward(self, x):
+        return self.drop(self.down(F.silu(self.gate(x)) * self.up(x)))
 
 class Block(nn.Module):
     def __init__(self, cfg: GPTConfig):
+        # super().__init__()
+        # self.ln1 = nn.LayerNorm(cfg.d_model)
+        # self.ln2 = nn.LayerNorm(cfg.d_model)
+        # self.attn = CausalSelfAttention(cfg)
+        # self.mlp  = MLP(cfg)
         super().__init__()
-        self.ln1 = nn.LayerNorm(cfg.d_model)
-        self.ln2 = nn.LayerNorm(cfg.d_model)
+        self.ln = nn.LayerNorm(cfg.d_model)
         self.attn = CausalSelfAttention(cfg)
-        self.mlp  = MLP(cfg)
-    def forward(self, x):
-        x = x + self.attn(self.ln1(x))
-        x = x + self.mlp(self.ln2(x))
-        return x
+        self.mlp = MLP(cfg)
+        ls_init = 0.001
+        self.ls_attn = nn.Parameter(ls_init * torch.ones(cfg.d_model))
+        self.ls_mlp  = nn.Parameter(ls_init * torch.ones(cfg.d_model))
+
+    # def forward(self, x):
+    #     x = x + self.attn(self.ln1(x))
+    #     x = x + self.mlp(self.ln2(x))
+    #     return x
+
+    def forward(self, x, freqs_cis):
+        ln_out = self.ln(x)
+        return x + self.ls_attn * self.attn(ln_out, freqs_cis) + self.ls_mlp * self.mlp(ln_out)
 
 class GPT(nn.Module):
     def __init__(self, cfg: GPTConfig):
+        # super().__init__()
+        # self.cfg = cfg
+        # self.token_emb = nn.Embedding(cfg.vocab_size, cfg.d_model)
+        # # self.pos_emb   = nn.Parameter(torch.zeros(1, cfg.block_size, cfg.d_model))
+        # freqs = precompute_rope_freqs(head_dim, cfg.block_size)
+        # self.register_buffer("freqs_cis", freqs)
+        # self.drop      = nn.Dropout(cfg.dropout)
+        # self.blocks    = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
+        # self.ln_f      = nn.LayerNorm(cfg.d_model)
+        # self.head      = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
+
+        # self.apply(self._init_weights)
+        # self.head.weight = self.token_emb.weight
         super().__init__()
         self.cfg = cfg
         self.token_emb = nn.Embedding(cfg.vocab_size, cfg.d_model)
-        self.pos_emb   = nn.Parameter(torch.zeros(1, cfg.block_size, cfg.d_model))
-        self.drop      = nn.Dropout(cfg.dropout)
-        self.blocks    = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
-        self.ln_f      = nn.LayerNorm(cfg.d_model)
-        self.head      = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
+        self.drop = nn.Dropout(cfg.dropout)
+        self.blocks = nn.ModuleList([Block(cfg) for _ in range(cfg.n_layer)])
+        self.ln_f = nn.LayerNorm(cfg.d_model)
+        self.head = nn.Linear(cfg.d_model, cfg.vocab_size, bias=False)
 
         self.apply(self._init_weights)
-        self.head.weight = self.token_emb.weight
+        self.head.weight = self.token_emb.weight  # weight tying
+
+        head_dim = cfg.d_model // cfg.n_head
+        freqs = precompute_rope_freqs(head_dim, cfg.block_size)
+        self.register_buffer("freqs_cis", freqs)
 
     @staticmethod
     def _init_weights(module):
         if isinstance(module, (nn.Linear, nn.Embedding)):
-            nn.init.normal_(module.weight, mean=0.0, std=0.02)
+            std = getattr(module, "RESIDUAL_SCALE_INIT", 0.02)
+            nn.init.normal_(module.weight, mean=0.0, std=std)
             if isinstance(module, nn.Linear) and module.bias is not None:
                 nn.init.zeros_(module.bias)
+    # def _init_weights(module):
+    #     if isinstance(module, (nn.Linear, nn.Embedding)):
+    #         nn.init.normal_(module.weight, mean=0.0, std=0.02)
+    #         if isinstance(module, nn.Linear) and module.bias is not None:
+    #             nn.init.zeros_(module.bias)
 
-    def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None):
+    # def forward(self, idx: torch.Tensor, targets: torch.Tensor | None = None):
+    #     B, T = idx.size()
+    #     tok = self.token_emb(idx)
+    #     pos = self.pos_emb[:, :T, :]
+    #     x = self.drop(tok + pos)
+    #     # for block in self.blocks: x = block(x)
+    #     for block in self.blocks:
+    #         x = checkpoint(block, x, self.freqs_cis, use_reentrant=False)
+    #     x = self.ln_f(x)
+    #     logits = self.head(x)
+    #     if targets is None:
+    #         loss = None
+    #     else:
+    #         loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), reduction='mean')
+    #     return logits, loss
+    def forward(self, idx, targets=None): #blah
         B, T = idx.size()
-        tok = self.token_emb(idx)
-        pos = self.pos_emb[:, :T, :]
-        x = self.drop(tok + pos)
-        for block in self.blocks: x = block(x)
+        x = self.drop(self.token_emb(idx))
+        for block in self.blocks:
+            x = checkpoint(block, x, self.freqs_cis, use_reentrant=False)
         x = self.ln_f(x)
         logits = self.head(x)
-        if targets is None:
-            loss = None
-        else:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1), reduction='mean')
+        loss = None
+        if targets is not None:
+            loss = F.cross_entropy(
+                logits.view(-1, logits.size(-1)),
+                targets.view(-1),
+                reduction="mean"
+            )
         return logits, loss
 
 def main():
-    args = Hyperparameters()
-    torch.manual_seed(args.seed)
+    args = Hyperparameters() # get the hyper parameters 
+
+    # for reproducibility, we set the random seed for both torch and random modules
+    torch.manual_seed(args.seed) 
     random.seed(args.seed)
     
+    # set up logging
     global logger
     logger = configure_logging(args.log_file)
     
-    hyperparams_dict = vars(args)
-    logger.log("hyperparameters_configured", **hyperparams_dict)
+    hyperparams_dict = vars(args) # convert the dataclass to a dictionary
+    logger.log("hyperparameters_configured", **hyperparams_dict) # logs all the hyper params
     
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-    logger.log("device_info", device=device)
+    device = "cuda" if torch.cuda.is_available() else "cpu" # checks for gpu
+    logger.log("device_info", device=device) # logs device info
 
-    train_titles, val_titles = get_titles(args.num_titles, args.seed, args.val_frac)
+    train_titles, val_titles = get_titles(args.num_titles, args.seed, args.val_frac) # extracts the titles from the dataset
     
-    eos_token = "<eos>"
-    tok = BPETokenizer(train_tokenizer(train_titles+val_titles, args.vocab_size, eos_token=eos_token))
+    eos_token = "<eos>" # eos token is used to seperate titles
+    tok = BPETokenizer(train_tokenizer(train_titles+val_titles, args.vocab_size, eos_token=eos_token)) 
+
+    # takes all the titles and puts them in a long string sperated by the eos token
     train_text = eos_token.join(train_titles) + eos_token
     val_text = eos_token.join(val_titles) + eos_token
+
+    # makes ids for the words and puts it in a tensor
     train_ids = torch.tensor(tok.encode(train_text), dtype=torch.long)
     val_ids = torch.tensor(tok.encode(val_text), dtype=torch.long)
     
@@ -274,24 +441,37 @@ def main():
         dropout    = args.dropout,
     )
     model = GPT(cfg).to(device)
-    model_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
-    logger.log("model_info", parameters_count=model_params)
+
+    num_params = sum(p.numel() for p in model.parameters() if p.requires_grad)
+    # log(fh, "model_info", num_params=num_params)
+    logger.log("model_info", parameters_count=num_params)
     
-    # opt = torch.optim.SGD(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps)
-
-    # opt = torch.optim.AdamW(model.parameters(), lr=3e-4, weight_decay=0.1)
-    # scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps)
-
-    opt = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=args.weight_decay)
-    scheduler = torch.optim.lr_scheduler.SequentialLR(
-        opt,
-        schedulers=[
-            torch.optim.lr_scheduler.LinearLR(opt, start_factor=0.01, end_factor=1.0, total_iters=args.warmup_steps),
-            torch.optim.lr_scheduler.CosineAnnealingLR(opt, T_max=max_steps - args.warmup_steps, eta_min=args.eta_min)
-        ],
-        milestones=[args.warmup_steps]
+    # --- Optimizer & Scheduler ---
+    # Muon for 2D weight matrices; AdamW inside Muon for 1D params & embeddings
+    muon_params = [p for n, p in model.named_parameters()
+                   if p.requires_grad and p.dim() == 2
+                   and 'token_emb' not in n and 'pos_emb' not in n]
+    adamw_params = [p for n, p in model.named_parameters()
+                    if p.requires_grad and (p.dim() < 2
+                    or 'token_emb' in n or 'pos_emb' in n)]
+    opt = Muon(
+        muon_params, lr=args.lr * 1.3, momentum=0.91,
+        adamw_params=[{"params": adamw_params, "weight_decay": 0.0}],
+        adamw_lr=args.lr, adamw_wd=0.0, adamw_betas=args.betas,
     )
+    warmup_steps = int(args.warmup_frac * max_steps)
+    min_lr_ratio = 1.0  # constant LR after warmup
+    def lr_lambda(step):
+        if step < warmup_steps:
+            return step / max(1, warmup_steps)
+        progress = (step - warmup_steps) / max(1, max_steps - warmup_steps)
+        cosine = 0.5 * (1.0 + math.cos(math.pi * progress))
+        return min_lr_ratio + (1.0 - min_lr_ratio) * cosine
+    scheduler = torch.optim.lr_scheduler.LambdaLR(opt, lr_lambda)
+
+    # --- SWA setup: average weights over last 60% of training ---
+    swa_start = int(0.40 * max_steps)
+    swa_model = torch.optim.swa_utils.AveragedModel(model)
 
     def evaluate():
         model.eval()
@@ -323,6 +503,22 @@ def main():
         perplexity = math.exp(min(loss_per_token, 20))
         return loss_per_token, perplexity
 
+    def evaluate_swa():
+        swa_model.eval()
+        losses = 0.0
+        total_tokens = 0
+        with torch.no_grad():
+            for xb, yb in iter_full_split(val_ids, args.block_size, args.batch_size, device):
+                logits, _ = swa_model(xb, yb)
+                B, T, V = logits.size()
+                loss = F.cross_entropy(logits.view(-1, V), yb.view(-1), reduction='sum')
+                losses += loss.item()
+                total_tokens += B * T
+        swa_model.train()
+        return losses / total_tokens
+
+    best_val_loss = float("inf")
+
     ptr = 0 # remembers where in the million token strip we are
     step = 0 # counts how many weight updates have happened total
     t0 = time.time() # used for timing
@@ -330,12 +526,18 @@ def main():
         for _ in tqdm(range(1, batches + 1), desc=f"Epoch {epoch}/{args.epochs}"):
             step += 1
             xb, yb, ptr = get_batch(train_ids, ptr, args.block_size, args.batch_size, device) # xb -> what the model sees, yb -> what the model should predict
-            _, loss = model(xb, yb) # forward pass, we get the loss directly from the model, no need to calculate it separately
+            with torch.autocast(device_type=device, dtype=torch.bfloat16): # using bf16 for faster training on supported hardware
+                _, loss = model(xb, yb)
+            # _, loss = model(xb, yb) # forward pass, we get the loss directly from the model, no need to calculate it separately
             opt.zero_grad(set_to_none=True) # 
+            if opt.adamw is not None:
+                opt.adamw.zero_grad(set_to_none=True)
             loss.backward() # backward pass, calculates the gradients for all parameters
             torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
             opt.step() # applies grad decent
-            scheduler.step()
+            scheduler.step() # updates the learning rate according to the schedule
+            if step >= swa_start:
+                swa_model.update_parameters(model)
 
             elapsed = time.time() - t0
             logger.log("training_step",
@@ -348,12 +550,20 @@ def main():
             if step == 1 or step % eval_interval == 0 or step == max_steps:
                 val_loss = evaluate()
                 val_loss_per_token, perplexity = evaluate_with_perplexity()
+                if val_loss < best_val_loss:
+                    best_val_loss = val_loss
                 logger.log("validation_step",
                           step=step,
                           max_steps=max_steps,
                           loss=val_loss,
                           perplexity=round(perplexity, 2),
                           elapsed_time=elapsed)
+
+
+    # --- SWA final evaluation ---
+    swa_val_loss = evaluate_swa()
+    if swa_val_loss < best_val_loss:
+        best_val_loss = swa_val_loss
 
 if __name__ == "__main__":
     try:
