@@ -81,7 +81,7 @@ class Hyperparameters:
     n_layer: int = 24
     n_head: int = 1
     d_model: int = 640
-    dropout: float = 0.05#0.1
+    dropout: float = 0.1
 
     # Training
     batch_size: int = 256
@@ -353,7 +353,7 @@ def main():
                     if p.requires_grad and (p.dim() < 2
                     or 'token_emb' in n or 'pos_emb' in n)]
     opt = Muon(
-        muon_params, lr=args.lr * 1.3, momentum=0.91,
+        muon_params, lr=args.lr * 1.5, momentum=0.91,
         adamw_params=[{"params": adamw_params, "weight_decay": 0.0}],
         adamw_lr=args.lr, adamw_wd=0.0, adamw_betas=args.betas,
     )
